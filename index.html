@@ -309,175 +309,104 @@ footer{background:var(--bg2);border-top:1px solid var(--border);padding:.8rem 1r
 // AUDIO — Web Speech API + Google Translate TTS (fallback)
 // ============================================================
 
-const LANG_CONFIG = {
-  'Français':    {ws:['fr-FR','fr'],           gt:'fr'},
-  'Espagnol':    {ws:['es-ES','es-US','es'],   gt:'es'},
-  'Anglais':     {ws:['en-GB','en-US','en'],   gt:'en'},
-  'Allemand':    {ws:['de-DE','de'],           gt:'de'},
-  'Italien':     {ws:['it-IT','it'],           gt:'it'},
-  'Portugais':   {ws:['pt-PT','pt-BR','pt'],   gt:'pt'},
-  'Arabe':       {ws:['ar-XA','ar-SA','ar-EG','ar-001','ar'], gt:'ar'},
-  'Mandarin':    {ws:['zh-CN','zh-TW','zh'],   gt:'zh-CN'},
-  'Russe':       {ws:['ru-RU','ru'],           gt:'ru'},
-  'Japonais':    {ws:['ja-JP','ja'],           gt:'ja'},
-  'Hindi':       {ws:['hi-IN','hi'],           gt:'hi'},
-  'Turc':        {ws:['tr-TR','tr'],           gt:'tr'},
-  'Polonais':    {ws:['pl-PL','pl'],           gt:'pl'},
-  'Roumain':     {ws:['ro-RO','ro'],           gt:'ro'},
-  'Coréen':      {ws:['ko-KR','ko'],           gt:'ko'},
-  'Grec':        {ws:['el-GR','el'],           gt:'el'},
-  'Ukrainien':   {ws:['uk-UA','uk'],           gt:'uk'},
-  'Suédois':     {ws:['sv-SE','sv'],           gt:'sv'},
-  'Danois':      {ws:['da-DK','da'],           gt:'da'},
-  'Norvégien':   {ws:['nb-NO','nn-NO','nb','no'], gt:'no'},
-  'Finnois':     {ws:['fi-FI','fi'],           gt:'fi'},
-  'Vietnamien':  {ws:['vi-VN','vi'],           gt:'vi'},
-  'Indonésien':  {ws:['id-ID','id'],           gt:'id'},
-  'Tchèque':     {ws:['cs-CZ','cs'],           gt:'cs'},
-  'Hongrois':    {ws:['hu-HU','hu'],           gt:'hu'},
-  'Néerlandais': {ws:['nl-NL','nl-BE','nl'],   gt:'nl'},
-  'Hébreu':      {ws:['he-IL','iw-IL','he','iw'], gt:'iw'},
-  'Persan':      {ws:['en-GB','en-US','en'], gt:'fa', romanize:true},
-  'Swahili':     {ws:null,                     gt:'sw'},
-  'Latin':       {ws:null,                     gt:'la'},
-  'Amharique':   {ws:null,                     gt:'am'},
-  'Wolof':       {ws:null,                     gt:'en'},
-  'Albanais':    {ws:['sq-AL','sq'],           gt:'sq'}
-};
+// ============================================================
+// AUDIO LOCAL — fichiers MP3 pré-générés dans audio/
+// (remplace l'ancien système Google Traduction / Web Speech)
+// ============================================================
 
-// ---- Cache des voix Web Speech ----
-let _voices = [];
-let _voicesReady = false;
-function _cacheVoices() {
-  const v = window.speechSynthesis ? speechSynthesis.getVoices() : [];
-  if (v.length > 0) { _voices = v; _voicesReady = true; }
-}
-if (window.speechSynthesis) {
-  _cacheVoices();
-  speechSynthesis.onvoiceschanged = _cacheVoices;
-  [50, 200, 500, 1200, 2500].forEach(t => setTimeout(_cacheVoices, t));
-}
+// Langues dont le mot est écrit « graphie native + romanisation ».
+// Pour l'audio on lit la GRAPHIE NATIVE uniquement — cette même
+// logique de nettoyage a servi à générer les noms de fichiers,
+// elle doit rester STRICTEMENT identique ici.
+const _NONLATIN = /[\u0600-\u06FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\u0900-\u097F\uAC00-\uD7AF\u0E00-\u0E7F\u0590-\u05FF\u1200-\u137F\u0370-\u03FF]/;
 
-function _findVoice(codes) {
-  for (const code of codes) {
-    const pfx = code.split('-')[0];
-    const v = _voices.find(x => x.lang === code)
-           || _voices.find(x => x.lang.startsWith(pfx + '-'))
-           || _voices.find(x => x.lang === pfx);
-    if (v) return v;
-  }
-  return null;
-}
-
-// ---- Extraction du texte ----
-// romanize=true : extraire la partie latine (romanisation) plutôt que le script natif
-function extractReadable(rawText, romanize) {
+// ---- Nettoyage du texte (miroir exact du script Python de génération) ----
+function _cleanText(rawText) {
   let t = (rawText || '').replace(/\([^)]*\)/g, '').trim();
   t = t.split('/')[0].trim();
-
-  if (romanize) {
-    // Extraire la romanisation latine (la partie après le script non-latin)
-    const latin = t
-      .replace(/[\u0600-\u06FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\u0900-\u097F\uAC00-\uD7AF\u0E00-\u0E7F\u0590-\u05FF\u1200-\u137F\u0370-\u03FF]+/g,' ')
-      .replace(/\s+/g,' ').trim()
-      .replace(/[āīūṭḍṣḥẓŋʿʾ]/g, m => ({'ā':'a','ī':'i','ū':'u','ṭ':'t','ḍ':'d','ṣ':'s','ḥ':'h','ẓ':'z','ŋ':'ng','ʿ':"'",'ʾ':"'"}[m]||''));
-    if (latin.length > 1) return latin;
-    return t.split(' ').find(w => /^[a-zA-Z]/.test(w)) || t;
-  }
-
-  // Écritures non-latines : garder uniquement les caractères natifs
-  if (/[\u0600-\u06FF\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\u0900-\u097F\uAC00-\uD7AF\u0E00-\u0E7F\u0590-\u05FF\u1200-\u137F\u0370-\u03FF]/.test(t)) {
-    const native = t.replace(/[\u0000-\u024F\u02B0-\u036F\u1D00-\u1DBF\u1E00-\u1EFF]+/g, ' ').replace(/\s+/g,' ').trim();
+  // Écritures non-latines : ne garder que les caractères natifs
+  if (_NONLATIN.test(t)) {
+    const native = t.replace(/[\u0000-\u024F\u02B0-\u036F\u1D00-\u1DBF\u1E00-\u1EFF]+/g, ' ')
+                    .replace(/\s+/g, ' ').trim();
     if (native) return native;
   }
-  return t.replace(/\[[^\]]*\]/g,'').replace(/[0-9]/g,'').trim() || (rawText||'').split(' ')[0];
+  t = t.replace(/\[[^\]]*\]/g, '').replace(/[0-9]/g, '').trim();
+  return t || (rawText || '').split(' ')[0];
 }
 
-// ---- Google Translate TTS : new Audio() sans crossOrigin ----
-// Ne PAS utiliser crossOrigin='anonymous' ni fetch() : les balises audio/video
-// ne sont pas soumises aux mêmes restrictions CORS que fetch().
-// new Audio(url).play() fonctionne cross-origin sans headers CORS spéciaux.
-let _gtAudio = null;
-// Élément audio réutilisable injecté dans le DOM (meilleures permissions que new Audio())
-let _gtAudioEl = null;
+// ---- Normalisation d'une coquille de langue présente dans les données ----
+function _normLang(lang) { return lang === 'Finois' ? 'Finnois' : lang; }
+
+// ---- SHA-1 (implémentation autonome, sans dépendance) ----
+// Retourne l'empreinte hex complète d'une chaîne UTF-8.
+function _sha1(str) {
+  function rotl(n, s) { return (n << s) | (n >>> (32 - s)); }
+  // encodage UTF-8
+  const bytes = [];
+  for (let i = 0; i < str.length; i++) {
+    let c = str.charCodeAt(i);
+    if (c < 0x80) bytes.push(c);
+    else if (c < 0x800) { bytes.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f)); }
+    else if (c >= 0xd800 && c <= 0xdbff) {
+      const c2 = str.charCodeAt(++i);
+      const cp = 0x10000 + ((c & 0x3ff) << 10) + (c2 & 0x3ff);
+      bytes.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+    } else { bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f)); }
+  }
+  const ml = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  for (let i = 7; i >= 0; i--) bytes.push((ml / Math.pow(2, i * 8)) & 0xff);
+
+  let h0 = 0x67452301, h1 = 0xEFCDAB89, h2 = 0x98BADCFE, h3 = 0x10325476, h4 = 0xC3D2E1F0;
+  for (let i = 0; i < bytes.length; i += 64) {
+    const w = new Array(80);
+    for (let j = 0; j < 16; j++)
+      w[j] = (bytes[i+j*4] << 24) | (bytes[i+j*4+1] << 16) | (bytes[i+j*4+2] << 8) | (bytes[i+j*4+3]);
+    for (let j = 16; j < 80; j++) w[j] = rotl(w[j-3] ^ w[j-8] ^ w[j-14] ^ w[j-16], 1);
+    let a=h0,b=h1,c=h2,d=h3,e=h4;
+    for (let j = 0; j < 80; j++) {
+      let f, k;
+      if (j < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
+      else if (j < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+      else if (j < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+      else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+      const t = (rotl(a,5) + f + e + k + w[j]) | 0;
+      e = d; d = c; c = rotl(b,30); b = a; a = t;
+    }
+    h0=(h0+a)|0; h1=(h1+b)|0; h2=(h2+c)|0; h3=(h3+d)|0; h4=(h4+e)|0;
+  }
+  const toHex = n => ('00000000' + (n >>> 0).toString(16)).slice(-8);
+  return toHex(h0)+toHex(h1)+toHex(h2)+toHex(h3)+toHex(h4);
+}
+
+// ---- Nom de fichier déterministe : SHA-1( langue + "|" + texte_nettoyé ), 16 hex ----
+function _audioHash(lang, text) { return _sha1(lang + '|' + text).substring(0, 16); }
+
+// ---- Élément <audio> réutilisable ----
+let _audioEl = null;
 function _getAudioEl() {
-  if (!_gtAudioEl) {
-    _gtAudioEl = document.createElement('audio');
-    _gtAudioEl.style.display = 'none';
-    document.body.appendChild(_gtAudioEl);
+  if (!_audioEl) {
+    _audioEl = document.createElement('audio');
+    _audioEl.style.display = 'none';
+    document.body.appendChild(_audioEl);
   }
-  return _gtAudioEl;
+  return _audioEl;
 }
 
-function _playGT(text, gtCode) {
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text)}&tl=${gtCode}&client=tw-ob&ttsspeed=0.9`;
-  // Essai 1 : audio element dans le DOM (pas de crossOrigin)
-  const el = _getAudioEl();
-  el.pause();
-  el.src = url;
-  el.load();
-  const p1 = el.play();
-  if (p1) {
-    p1.catch(() => {
-      // Essai 2 : nouvel objet Audio detached
-      const a2 = new Audio(url);
-      a2.play().catch(() => {});
-    });
-  }
-}
-
-// ---- Fonction principale speak() ----
+// ---- Fonction principale : joue le MP3 local correspondant ----
 function speak(rawText, lang) {
   if (!lang) return;
-  const cfg = LANG_CONFIG[lang];
-  if (!cfg) return;
-  const text = extractReadable(rawText, cfg.romanize);
+  const L = _normLang(lang);
+  const text = _cleanText(rawText);
   if (!text) return;
-
-  // Langues sans voix WS (Swahili, Latin, Amharique, Wolof) → Google TTS
-  if (!cfg.ws) {
-    _playGT(text, cfg.gt);
-    return;
-  }
-
-  // Persan (romanize) : utiliser speechSynthesis directement sans chercher de voix
-  // → le navigateur utilise sa voix par défaut pour lire la romanisation latine
-  if (cfg.romanize) {
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.lang  = 'en-GB';
-    utt.rate  = 0.85;
-    utt.pitch = 1;
-    utt.volume = 1;
-    // Ne pas forcer utt.voice → le navigateur choisit la voix anglaise disponible
-    speechSynthesis.cancel();
-    setTimeout(() => speechSynthesis.speak(utt), 50);
-    return;
-  }
-
-  // Autres langues : chercher voix Web Speech native
-  const doSpeak = () => {
-    const voice = _findVoice(cfg.ws);
-    if (voice) {
-      const utt = new SpeechSynthesisUtterance(text);
-      utt.voice = voice;
-      utt.lang  = voice.lang;
-      utt.rate  = 0.85;
-      utt.pitch = 1;
-      utt.volume = 1;
-      speechSynthesis.cancel();
-      setTimeout(() => speechSynthesis.speak(utt), 50);
-    } else {
-      // Voix absente → Google TTS
-      _playGT(text, cfg.gt);
-    }
-  };
-
-  if (_voicesReady) {
-    doSpeak();
-  } else {
-    // Voix pas encore chargées → attendre
-    setTimeout(() => { _cacheVoices(); doSpeak(); }, 400);
-  }
+  const path = 'audio/' + _audioHash(L, text) + '.mp3';
+  const el = _getAudioEl();
+  el.pause();
+  el.src = path;
+  el.load();
+  const p = el.play();
+  if (p && p.catch) p.catch(() => {});
 }
 
 function speakWord(word, lang, btn) {
